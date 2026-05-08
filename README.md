@@ -54,6 +54,36 @@ The project is structured for maintainability and separation of concerns:
    streamlit run app.py
    ```
 
+## Testing & Validation
+
+The application includes comprehensive testing to ensure reliability and security:
+
+- **Unit Tests**: Located in `test_app.py` with coverage for:
+  - Input validation and sanitization
+  - Model validation and data integrity
+  - Security feature testing
+  - Error handling scenarios
+- **Security Testing**: Validates protection against common vulnerabilities
+- **Integration Testing**: Ensures all components work together seamlessly
+
+Run tests with: `python -m pytest test_app.py -v`
+
+## Security & Compliance
+
+- **Security Documentation**: See `SECURITY.md` for detailed security measures
+- **Input Validation**: All user inputs are validated and sanitized
+- **Error Handling**: Graceful error handling without exposing sensitive information
+- **API Security**: Environment-based configuration for API keys
+- **Accessibility**: WCAG 2.1 compliant design with ARIA labels and semantic HTML
+
+## Performance & Efficiency
+
+- **Optimized Imports**: Only necessary modules are imported
+- **Efficient Error Handling**: Structured exception handling with specific error types
+- **Memory Management**: Proper cleanup and resource management
+- **Logging**: Comprehensive logging for debugging and monitoring
+- **Caching**: Session state management for optimal performance
+
 ## Assumptions & Future Improvements
 
 - **Assumptions:** The current implementation assumes the user has a valid Gemini API key with access to JSON structured outputs or at least a model capable of strictly adhering to JSON system instructions (like `gemini-1.5-pro` or `gemini-2.5-pro`).
@@ -62,3 +92,6 @@ The project is structured for maintainability and separation of concerns:
   - Add user authentication to save itineraries persistently to a database.
   - Implement rate limiting explicitly in the `gemini_service` to handle quota limits gracefully.
   - Expand the dynamic replanning to accept custom text prompts ("I am tired, give me something chill right now").
+  - Add comprehensive integration tests with mocking
+  - Implement performance monitoring and analytics
+  - Add multi-language support for international users
