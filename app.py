@@ -1,16 +1,20 @@
 import streamlit as st
 import traceback
 import logging
+import time
 from typing import Optional
 from models.trip_model import TripRequest, ItineraryResponse
 from services.planner_service import create_or_adapt_itinerary
 from services.maps_service import get_google_maps_search_url
-from utils.validators import validate_trip_inputs
-from utils.sanitizers import sanitize_input
-from utils.error_handler import handle_api_error
+from utils.validators import validate_complete_form
+from utils.sanitizers import sanitize_destination, sanitize_food_prefs
+from utils.error_handler import handle_api_error, log_user_action, log_performance_metric, handle_streamlit_error
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 st.set_page_config(
@@ -111,39 +115,65 @@ for k, v in [("itinerary", None), ("current_request", None)]:
     if k not in st.session_state:
         st.session_state[k] = v
 
+@handle_streamlit_error
 def generate_plan(request_data: dict, replanning_trigger: Optional[str] = None) -> None:
-    """Generate or adapt travel itinerary with enhanced error handling."""
+    """Generate or adapt travel itinerary with enhanced error handling and validation."""
+    start_time = time.time()
+    
     try:
-        dest = sanitize_input(request_data["destination"])
-        is_valid, errors = validate_trip_inputs(dest, request_data["num_days"])
+        # Log user action
+        action = f"Generate itinerary for {request_data.get('destination', 'Unknown')}"
+        if replanning_trigger:
+            action += f" (trigger: {replanning_trigger})"
+        log_user_action(action)
+        
+        # Enhanced validation
+        is_valid, errors = validate_complete_form(request_data)
         
         if not is_valid:
             for error in errors:
                 st.error(f"⚠️ {error}")
+            logger.warning(f"Validation failed: {errors}")
             return
             
+        # Sanitize inputs
+        sanitized_dest = sanitize_destination(request_data["destination"])
+        sanitized_food = sanitize_food_prefs(request_data["food_prefs"])
+        
+        # Update request data with sanitized inputs
+        sanitized_request = request_data.copy()
+        sanitized_request["destination"] = sanitized_dest
+        sanitized_request["food_prefs"] = sanitized_food
+        
         prev = st.session_state.itinerary.model_dump() if st.session_state.itinerary else None
         req = TripRequest(
-            destination=dest,
-            budget=request_data["budget"],
-            num_days=request_data["num_days"],
-            group_type=request_data["group_type"],
-            trip_style=request_data["trip_style"],
-            accessibility=request_data["accessibility"],
-            food_prefs=request_data["food_prefs"],
-            crowd_tolerance=request_data["crowd_tolerance"],
-            weather_pref=request_data["weather_pref"],
+            destination=sanitized_dest,
+            budget=sanitized_request["budget"],
+            num_days=sanitized_request["num_days"],
+            group_type=sanitized_request["group_type"],
+            trip_style=sanitized_request["trip_style"],
+            accessibility=sanitized_request["accessibility"],
+            food_prefs=sanitized_food,
+            crowd_tolerance=sanitized_request["crowd_tolerance"],
+            weather_pref=sanitized_request["weather_pref"],
             previous_itinerary=prev,
             replanning_trigger=replanning_trigger,
         )
-        st.session_state.current_request = request_data
+        st.session_state.current_request = sanitized_request
         
         with st.spinner("🧠 Building your itinerary…"):
             st.session_state.itinerary = create_or_adapt_itinerary(req)
-            logger.info(f"Successfully generated itinerary for {dest}")
+            
+            # Log performance
+            elapsed_time = time.time() - start_time
+            log_performance_metric("itinerary_generation", elapsed_time)
+            
+            logger.info(f"Successfully generated itinerary for {sanitized_dest} in {elapsed_time:.2f}s")
+            st.success("✅ Itinerary generated successfully!")
             
     except ValueError as ve:
-        st.error(f"⚠️ Invalid input: {str(ve)}")
+        error_msg = handle_api_error(ve)
+        st.error(f"⚠️ {error_msg}")
         logger.warning(f"Validation error: {ve}")
     except KeyError as ke:
         st.error(f"⚠️ Missing required field: {str(ke)}")
@@ -164,49 +194,57 @@ with st.sidebar:
         dest = st.text_input(
             "📍 Destination", 
             placeholder="Goa, Paris, Tokyo…",
-            help="Enter your travel destination"
+            help="Enter your travel destination (letters, spaces, hyphens, apostrophes only)",
+            max_chars=100
         )
         budget = st.selectbox(
             "💰 Budget", 
             ["Budget", "Moderate", "Luxury", "No Limit"],
-            help="Select your budget range"
+            help="Select your budget range",
+            index=1
         )
         days = st.number_input(
             "📅 Days", 
             min_value=1, 
             max_value=14, 
             value=3,
-            help="Number of days for your trip"
+            help="Number of days for your trip (1-14)"
         )
         group = st.selectbox(
             "👥 Group", 
             ["Solo", "Couple", "Family with Kids", "Friends Group", "Seniors"],
-            help="Who are you traveling with?"
+            help="Who are you traveling with?",
+            index=1
         )
         style = st.selectbox(
             "🎭 Style", 
             ["Relaxed", "Action-Packed", "Cultural Deep-Dive", "Nature Focus"],
-            help="What type of trip do you prefer?"
+            help="What type of trip do you prefer?",
+            index=0
         )
         acc = st.selectbox(
             "♿ Accessibility", 
             ["None", "Low Walking", "Wheelchair Accessible", "Stroller Friendly"],
-            help="Accessibility requirements"
+            help="Accessibility requirements",
+            index=0
         )
         food = st.text_input(
             "🍽️ Food Prefs", 
             placeholder="Vegan, Halal…",
-            help="Dietary preferences or restrictions"
+            help="Dietary preferences or restrictions (optional)",
+            max_chars=200
         )
         crowd = st.selectbox(
             "🧍 Crowds", 
             ["High (Don't mind)", "Moderate", "Low (Avoid crowds)"],
-            help="Crowd tolerance level"
+            help="Crowd tolerance level",
+            index=1
         )
         wthr = st.selectbox(
             "🌤️ Weather", 
             ["Any", "Prefer Indoor if Hot/Rainy", "Love Outdoors Regardless"],
-            help="Weather preferences"
+            help="Weather preferences",
+            index=0
         )
         st.markdown("<br>", unsafe_allow_html=True)
         
@@ -257,13 +295,13 @@ else:
             for act in day.activities:
                 url = get_google_maps_search_url(f"{act.title} {dest_label}")
                 st.markdown(f"""
-                <div class="act" role="article" aria-labelledby="act-{day.day_number}-{act.time}">
-                  <div class="act-time" id="act-{day.day_number}-{act.time}">⏰ {act.time}</div>
-                  <div class="act-title"><a href="{url}" target="_blank" rel="noopener noreferrer">{act.title} ↗</a></div>
+                <div class="act" role="article" aria-labelledby="act-{day.day_number}-{act.time.replace(':', '-')}" tabindex="0">
+                  <div class="act-time" id="act-{day.day_number}-{act.time.replace(':', '-')}">⏰ {act.time}</div>
+                  <div class="act-title"><a href="{url}" target="_blank" rel="noopener noreferrer" aria-label="Search for {act.title} on Google Maps">{act.title} ↗</a></div>
                   <div class="act-desc">{act.description}</div>
                   <div class="tags">
-                    <span class="tag tc">💰 {act.cost_estimate}</span>
-                    <span class="tag ta">♿ {act.accessibility_notes}</span>
+                    <span class="tag tc" aria-label="Cost estimate: {act.cost_estimate}">💰 {act.cost_estimate}</span>
+                    <span class="tag ta" aria-label="Accessibility: {act.accessibility_notes}">♿ {act.accessibility_notes}</span>
                   </div>
                 </div>""", unsafe_allow_html=True)
 
@@ -271,9 +309,9 @@ else:
                 st.markdown("**🛡️ Fallbacks:**")
                 for fb in day.fallback_plans:
                     fb_url = get_google_maps_search_url(f"{fb.alternative_activity.title} {dest_label}")
-                    st.markdown(f"""<div class="fb" role="complementary">
-                      <strong>If {fb.trigger_condition}:</strong>
-                      <a href="{fb_url}" target="_blank" rel="noopener noreferrer">{fb.alternative_activity.title}</a>
+                    st.markdown(f"""<div class="fb" role="complementary" aria-labelledby="fallback-{day.day_number}-{fb.alternative_activity.title.replace(' ', '-')}" tabindex="0">
+                      <strong id="fallback-{day.day_number}-{fb.alternative_activity.title.replace(' ', '-')}">If {fb.trigger_condition}:</strong>
+                      <a href="{fb_url}" target="_blank" rel="noopener noreferrer" aria-label="Search for {fb.alternative_activity.title} on Google Maps">{fb.alternative_activity.title}</a>
                       — {fb.alternative_activity.description}
                     </div>""", unsafe_allow_html=True)
             st.markdown('<hr class="divider">', unsafe_allow_html=True)
@@ -281,12 +319,12 @@ else:
     with tab2:
         de = itin.decision_engine
         c1,c2 = st.columns(2)
-        c1.markdown(f'<div class="rc" role="complementary"><h4 id="recommendations">💡 Recommendations</h4><p>{de.recommendation_reasoning}</p></div>', unsafe_allow_html=True)
-        c2.markdown(f'<div class="rc" role="complementary"><h4 id="accessibility">♿ Accessibility</h4><p>{de.accessibility_reasoning}</p></div>', unsafe_allow_html=True)
+        c1.markdown(f'<div class="rc" role="complementary" aria-labelledby="recommendations" tabindex="0"><h4 id="recommendations">💡 Recommendations</h4><p>{de.recommendation_reasoning}</p></div>', unsafe_allow_html=True)
+        c2.markdown(f'<div class="rc" role="complementary" aria-labelledby="accessibility" tabindex="0"><h4 id="accessibility">♿ Accessibility</h4><p>{de.accessibility_reasoning}</p></div>', unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
         c3,c4 = st.columns(2)
-        c3.markdown(f'<div class="rc" role="complementary"><h4 id="crowds">🧍 Crowds</h4><p>{de.crowd_optimization_logic}</p></div>', unsafe_allow_html=True)
-        c4.markdown(f'<div class="rc" role="complementary"><h4 id="budget">💸 Budget</h4><p>{de.budget_balancing_logic}</p></div>', unsafe_allow_html=True)
+        c3.markdown(f'<div class="rc" role="complementary" aria-labelledby="crowds" tabindex="0"><h4 id="crowds">🧍 Crowds</h4><p>{de.crowd_optimization_logic}</p></div>', unsafe_allow_html=True)
+        c4.markdown(f'<div class="rc" role="complementary" aria-labelledby="budget" tabindex="0"><h4 id="budget">💸 Budget</h4><p>{de.budget_balancing_logic}</p></div>', unsafe_allow_html=True)
         if de.adaptation_summary:
             st.info(f"🔄 **Adaptation:** {de.adaptation_summary}")
 
@@ -301,7 +339,9 @@ else:
                 label, 
                 use_container_width=True, 
                 key=f"trigger_{i}",
-                help=f"Simulate: {val}"
+                help=f"Simulate: {val}",
+                type="secondary"
             ):
+                log_user_action(f"Triggered replanning: {val}")
                 generate_plan(st.session_state.current_request, replanning_trigger=val)
                 st.rerun()
